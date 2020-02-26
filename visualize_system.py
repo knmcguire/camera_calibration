@@ -19,6 +19,7 @@ from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.mem import MemoryElement
 from cflib.crazyflie.mem import LighthouseBsGeometry
 
+import cv2 as cv
 
 class Visualizer:
     def __init__(self):
@@ -289,10 +290,11 @@ class Ray:
 
 
 class Setup:
-    def __init__(self, basestations, rays, deck):
+    def __init__(self, basestations, rays, deck, estimator):
         self.bss = basestations
         self.rays = rays
         self.deck = deck
+        self.estimator = estimator
 
     def update_data(self, coms):
         self.deck.update_data(coms)
@@ -303,6 +305,10 @@ class Setup:
                 ray.update_data(coms)
 
     def visualize(self, visualizer):
+        try:
+            self.estimator.visualize(visualizer)
+        except Exception as error:
+            print(error)
         for bs in self.bss:
             bs.visualize(visualizer)
         self.deck.visualize(visualizer)
@@ -341,7 +347,7 @@ class Communicator:
             ]
         ])
 
-        self.got_geo_data = True
+        '''self.got_geo_data = True
 
         bs1 = LighthouseBsGeometry()
         bs1.origin = np.array([-1.9584829807281494, 0.5422989726066589, 3.152726888656616])
@@ -361,7 +367,7 @@ class Communicator:
         ])
         bs2.rotation_matrix = np.array([[0.018067000433802605, -0.9993360042572021, 0.03164700046181679], [0.7612509727478027, 0.034269001334905624, 0.6475520133972168], [-0.6482059955596924, 0.012392000295221806, 0.7613639831542969]])
           
-        self.geo_data = [bs1, bs2]
+        self.geo_data = [bs1, bs2]'''
         
         self._cf = Crazyflie(rw_cache='./cache')
         self._cf.connected.add_callback(self._connected)
@@ -482,6 +488,137 @@ class Communicator:
         self.got_geo_data = True
         mem.dump()
 
+class BaseStationEstimation:
+    def __init__(self):
+        self.angle = []
+        self.vis_marker = Marker(color='orange')
+        self.vis_body_or = None
+        self.vis_body_or_nr = None
+
+        self.bs1_est_loc  = np.array((0.0, 0.0, 0.0))
+
+
+    
+    def do_estimation(self, coms):
+        sensor_distance_width=0.015
+        sensor_distance_lenght=0.03
+
+        try:
+            lighthouse_3d = np.float32([[-sensor_distance_lenght/2, sensor_distance_width/2, 0],
+                    [-sensor_distance_lenght/2, -sensor_distance_width/2, 0],
+                    [sensor_distance_lenght/2, sensor_distance_width/2, 0],
+                    [sensor_distance_lenght/2, -sensor_distance_width/2, 0]])
+            lighthouse_image_projection = np.float32(
+                [
+                    [ math.tan(coms.angle[0][0][0]) , math.tan(coms.angle[0][0][1])],
+                    [ math.tan(coms.angle[0][1][0]) , math.tan(coms.angle[0][1][1])],
+                    [ math.tan(coms.angle[0][2][0]) , math.tan(coms.angle[0][2][1])],
+                    [ math.tan(coms.angle[0][3][0]) , math.tan(coms.angle[0][3][1])]
+                ])
+            K = np.float64([[1, 0, 0],
+                            [0, 1, 0],
+                            [0.0,0.0,1.0]])
+            dist_coef = np.zeros(4)
+
+
+            _ret, rvec_est, tvec_est = cv.solvePnP(lighthouse_3d, lighthouse_image_projection, K, dist_coef,flags=cv.SOLVEPNP_ITERATIVE)
+            #print(tvec_est)
+            #print(rvec_est)
+
+            Rmatrix, _ = cv.Rodrigues(rvec_est)
+            
+            #self.r=np.linalg.inv(Rmatrix)
+            rotation = np.linalg.inv(Rmatrix)
+
+            opencv_to_cf = np.array([
+                [0.0, 0.0, -1.0],
+                [-1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                ])
+            cf_to_opencv = np.array([
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [-1.0, 0.0, 0.0],
+                ])
+
+            z_min = np.array([
+                [0.0, -1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0]
+                ])
+            #self.r = np.dot(opencv_to_cf, rotation)
+           
+            rotated_vector= np.matmul(rotation,tvec_est)
+
+            #euler_angles = self.rotationMatrixToEulerAngles(rotation)
+           # rotation_matrix = self._rotation_matrix(euler_angles[0],euler_angles[1],euler_angles[2])
+            #print(rotated_vector)
+            if(rotated_vector[2][0]<0 and rotated_vector[0][0]>0):
+            #print(tvec_est)
+            #print(rvec_est)
+                self.bs1_est_loc  = np.array((0.0, 0.0, 0.0))
+                self.bs1_est_loc[0] = -rotated_vector[0][0]+coms.x
+                self.bs1_est_loc[1] = -rotated_vector[1][0]+coms.y
+                self.bs1_est_loc[2] = -rotated_vector[2][0]+coms.z
+                print(np.matmul(np.linalg.inv(z_min), rotation))
+                self.r2 = rotation
+
+                self.r = np.dot(opencv_to_cf, np.dot(rotation, cf_to_opencv))
+
+                #self.r =  np.matmul(np.matmul(np.linalg.inv(z_min), rotation), z_min)
+           # print(rotated_vector)
+
+            #self.r = np.dot(opencv_to_cf, np.dot(rotation, cf_to_opencv))
+            #print(rotated_vector)
+
+
+
+        except Exception as error:
+            print(error)            
+
+
+    def visualize(self, visualizer):
+       # print('estimation vector',self.bs1_est_loc.T)
+        self.vis_marker.visualize(self.bs1_est_loc, visualizer)
+        self.vis_body_or_nr = visualizer.body_orientation(self.bs1_est_loc, self.r2, prev=self.vis_body_or_nr)
+        self.vis_body_or = visualizer.body_orientation(self.bs1_est_loc, self.r, prev=self.vis_body_or)
+
+    def _rotation_matrix(self, roll, pitch, yaw):
+        # http://planning.cs.uiuc.edu/node102.html
+        # Pitch reversed compared to page above
+        cg = math.cos(roll)
+        cb = math.cos(-pitch)
+        ca = math.cos(yaw)
+        sg = math.sin(roll)
+        sb = math.sin(-pitch)
+        sa = math.sin(yaw)
+
+        r = [
+            [ca * cb, ca * sb * sg - sa * cg, ca * sb * cg + sa * sg],
+            [sa * cb, sa * sb * sg + ca * cg, sa * sb * cg - ca * sg],
+            [-sb, cb * sg, cb * cg],
+        ]
+
+        return np.array(r)
+
+    def rotationMatrixToEulerAngles(self, R) :
+    
+        
+        sy = math.sqrt(R[0,0] * R[0,0] +  R[1,0] * R[1,0])
+        
+        singular = sy < 1e-6
+    
+        if  not singular :
+            x = math.atan2(R[2,1] , R[2,2])
+            y = math.atan2(-R[2,0], sy)
+            z = math.atan2(R[1,0], R[0,0])
+        else :
+            x = math.atan2(-R[1,2], R[1,1])
+            y = math.atan2(-R[2,0], sy)
+            z = 0
+    
+        return np.array([x, y, z])
+
 
 ################################################################
 
@@ -507,14 +644,17 @@ class Main:
         ]
 
         self.deck = Deck()
+        self.estimator = BaseStationEstimation()
 
-        self.setup = Setup(self.bss, self.rays, self.deck)
+        self.setup = Setup(self.bss, self.rays, self.deck, self.estimator)
+
 
         self.visualizer = Visualizer()
         self.visualizer.run_timer(0.1, self.update)
 
     def update(self, ev):
         self.setup.update_data(self.coms)
+        self.estimator.do_estimation(self.coms)
         self.setup.visualize(self.visualizer)
 
 
