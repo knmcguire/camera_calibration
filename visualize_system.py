@@ -496,7 +496,7 @@ class BaseStationEstimation:
         self.vis_body_or_nr = None
 
         self.bs1_est_loc  = np.array((0.0, 0.0, 0.0))
-
+        self.first_run = True
 
     
     def do_estimation(self, coms):
@@ -520,12 +520,23 @@ class BaseStationEstimation:
                             [0.0,0.0,1.0]])
             dist_coef = np.zeros(4)
 
+            #tvec_est = np.float32([[ 0.15805522], [-1.28796501], [ 3.38995395]])
+            #rvec_est = np.float32([[2.42781741], [2.62646853], [1.43358334]])
+            #if self.first_run is True: 
+            self.tvec_est = np.float32([[0], [-1], [1]])
+            self.rvec_est = np.float32([[0], [0], [0]])
+                #self.first_run = False
 
-            _ret, rvec_est, tvec_est = cv.solvePnP(lighthouse_3d, lighthouse_image_projection, K, dist_coef,flags=cv.SOLVEPNP_ITERATIVE)
-            #print(tvec_est)
-            #print(rvec_est)
+            _ret, self.rvec_est, self.tvec_est = cv.solvePnP(lighthouse_3d, lighthouse_image_projection, K, dist_coef,flags=cv.SOLVEPNP_ITERATIVE,
+                rvec=self.rvec_est,tvec=self.tvec_est, useExtrinsicGuess=True)
+            
+            
 
-            Rmatrix, _ = cv.Rodrigues(rvec_est)
+            #_ret, rvec_test, tvec_test,_=cv.solvePnPGeneric(objectPoints=lighthouse_3d, imagePoints= lighthouse_image_projection, cameraMatrix= K, distCoeffs=dist_coef,flags=cv.SOLVEPNP_ITERATIVE)
+            #self.rvec_est, self.tvec_est	=	cv.solvePnPRefineLM(	lighthouse_3d, lighthouse_image_projection, K, dist_coef, rvec=self.rvec_est,tvec=self.tvec_est,criteria=(cv.TERM_CRITERIA_EPS+cv.TERM_CRITERIA_COUNT, 50,0.0001)	)
+            #print(rvec_test.shape)
+            
+            Rmatrix, _ = cv.Rodrigues(self.rvec_est)
             
             #self.r=np.linalg.inv(Rmatrix)
             rotation = np.linalg.inv(Rmatrix)
@@ -542,28 +553,43 @@ class BaseStationEstimation:
                 ])
 
             z_min = np.array([
-                [0.0, -1.0, 0.0],
-                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [-1.0, 0.0, 0.0],
                 [0.0, 0.0, 1.0]
+                ])
+
+            y_min= np.array([
+                [0.0, 0.0, -1.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0]
                 ])
             #self.r = np.dot(opencv_to_cf, rotation)
            
-            rotated_vector= np.matmul(rotation,tvec_est)
+            rotated_vector= np.matmul(rotation,self.tvec_est)
 
             #euler_angles = self.rotationMatrixToEulerAngles(rotation)
            # rotation_matrix = self._rotation_matrix(euler_angles[0],euler_angles[1],euler_angles[2])
             #print(rotated_vector)
-            if(rotated_vector[2][0]<0 and rotated_vector[0][0]>0):
+            #if(rotated_vector[2][0]<0 and rotated_vector[0][0]>0):
+              #  print(tvec_est)
+              #  print(rvec_est)
             #print(tvec_est)
             #print(rvec_est)
-                self.bs1_est_loc  = np.array((0.0, 0.0, 0.0))
-                self.bs1_est_loc[0] = -rotated_vector[0][0]+coms.x
-                self.bs1_est_loc[1] = -rotated_vector[1][0]+coms.y
-                self.bs1_est_loc[2] = -rotated_vector[2][0]+coms.z
-                print(np.matmul(np.linalg.inv(z_min), rotation))
-                self.r2 = rotation
+            self.bs1_est_loc  = np.array((0.0, 0.0, 0.0))
+            self.bs1_est_loc[0] = -rotated_vector[0][0]+coms.x
+            self.bs1_est_loc[1] = -rotated_vector[1][0]+coms.y
+            self.bs1_est_loc[2] = -rotated_vector[2][0]+coms.z
+            #print(np.matmul(np.linalg.inv(z_min), rotation))
+            self.r2 = rotation
+            #print(rotation.shape)
+           # print(rotation)
+           #print(np.matmul(z_min,rotation))
 
-                self.r = np.dot(opencv_to_cf, np.dot(rotation, cf_to_opencv))
+            self.r = rotation
+            #rot_temp = np.matmul(np.matmul(np.linalg.inv(z_min), rotation),z_min)
+
+            #self.r = np.matmul(rotation,z_min)
+            self.r = np.matmul(np.matmul(rotation,z_min),y_min)
 
                 #self.r =  np.matmul(np.matmul(np.linalg.inv(z_min), rotation), z_min)
            # print(rotated_vector)
@@ -580,7 +606,7 @@ class BaseStationEstimation:
     def visualize(self, visualizer):
        # print('estimation vector',self.bs1_est_loc.T)
         self.vis_marker.visualize(self.bs1_est_loc, visualizer)
-        self.vis_body_or_nr = visualizer.body_orientation(self.bs1_est_loc, self.r2, prev=self.vis_body_or_nr)
+        #self.vis_body_or_nr = visualizer.body_orientation(self.bs1_est_loc, self.r2, prev=self.vis_body_or_nr)
         self.vis_body_or = visualizer.body_orientation(self.bs1_est_loc, self.r, prev=self.vis_body_or)
 
     def _rotation_matrix(self, roll, pitch, yaw):
